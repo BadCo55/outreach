@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Customer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
@@ -32,6 +33,9 @@ class ProxyCustomerLatestController extends Controller
         $cachedRows = Cache::get('proxy:customer_latest:normalized');
         if ($cachedRows) {
             $rows   = collect($cachedRows);
+
+            $rows = $this->rejectExistingCustomers($rows);
+
             $total  = $rows->count();
             $offset = ($page - 1) * $perPage;
             $paged  = $rows->slice($offset, $perPage)->values();
@@ -111,8 +115,10 @@ class ProxyCustomerLatestController extends Controller
         $raw  = $resp->json();
         $rows = $this->normalize($raw)->values();
 
+        $rows = $this->rejectExistingCustomers($rows);
+
         // Cache normalized for quick future loads
-        Cache::put('proxy:customer_latest:normalized', $rows, now()->addMinutes(5));
+        Cache::put('proxy:customer_latest:normalized', $rows, now()->addMinutes(1440));
         Log::info('proxy:normalized_cached', [
             'req_id' => $reqId,
             'normalized_count' => $rows->count(),
@@ -256,5 +262,33 @@ class ProxyCustomerLatestController extends Controller
                 return $hasContact && $hasInspection;
             })
             ->values();
+    }
+
+    private function rejectExistingCustomers(Collection $rows): Collection
+    {
+        // Collect legacy IDs from the normalized payload
+        $ids = $rows
+            ->pluck('customer.id')
+            ->filter(fn($v) => $v !== null)
+            ->map(fn($v) => (int)$v)
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return $rows;
+        }
+
+        // Fetch existing legacy IDs from your DB
+        $existing = Customer::query()
+            ->whereIn('legacy_id', $ids)
+            ->pluck('legacy_id')
+            ->map(fn($v) => (int)$v)
+            ->all();
+
+        // Drop rows whose legacy id already exists
+        return $rows->reject(function ($row) use ($existing) {
+            $legacyId = isset($row['customer']['id']) ? (int)$row['customer']['id'] : null;
+            return $legacyId !== null && in_array($legacyId, $existing, true);
+        })->values();
     }
 }
