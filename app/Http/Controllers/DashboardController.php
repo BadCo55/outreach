@@ -49,7 +49,7 @@ class DashboardController extends Controller
             try {
                 Http::acceptJson()
                     ->connectTimeout(2)
-                    ->timeout(4)
+                    ->timeout(10)
                     ->get(route('get-customers'), ['page' => 1, 'perPage' => 1]);
                 Log::info('dashboard:warm_ping_sent', ['req_id' => $reqId]);
             } catch (\Throwable $e) {
